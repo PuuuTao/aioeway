@@ -184,9 +184,8 @@ class DeviceMQTTClient:
                 continue
         
             try:
-                async with self.client.unfiltered_messages() as messages:
-                    async for message in messages:
-                        await self._process_message(message)
+                async for message in self.client.messages:
+                    await self._process_message(message)
 
             except asyncio.CancelledError:
                 logger.info("消息处理器已停止")
