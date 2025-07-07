@@ -129,18 +129,77 @@ class DeviceMQTTClient:
         # 停止事件
         self._stop_event = asyncio.Event()
     
-    async def _handle_messages(self):
-        """异步消息处理器"""
+    async def _resubscribe_all_topics(self):
+        """重新订阅所有之前的主题"""
         if not self.client:
             return
             
         try:
-            async for message in self.client.messages:
-                await self._process_message(message)
-        except asyncio.CancelledError:
-            logger.info("消息处理器已停止")
+            # 重新订阅设备信息主题
+            for device_key in list(self.device_info_callbacks.keys()):
+                if "_info_get" in device_key or "_data_get" in device_key:
+                    continue  # 跳过临时的get主题
+                    
+                device_id, device_sn = device_key.split("_", 1)
+                topic = f"{device_id}/{device_sn}/info/post"
+                await self.client.subscribe(topic, qos=1)
+                logger.debug(f"重新订阅信息主题: {topic}")
+            
+            # 重新订阅设备数据主题
+            for device_key in list(self.device_data_callbacks.keys()):
+                if "_info_get" in device_key or "_data_get" in device_key:
+                    continue  # 跳过临时的get主题
+                    
+                device_id, device_sn = device_key.split("_", 1)
+                topic = f"{device_id}/{device_sn}/data/post"
+                await self.client.subscribe(topic, qos=1)
+                logger.debug(f"重新订阅数据主题: {topic}")
+                
+            # 重新订阅get主题
+            for device_key in list(self.device_info_callbacks.keys()):
+                if "_info_get" in device_key:
+                    base_key = device_key.replace("_info_get", "")
+                    device_id, device_sn = base_key.split("_", 1)
+                    topic = f"{device_id}/{device_sn}/info/get"
+                    await self.client.subscribe(topic, qos=1)
+                    logger.debug(f"重新订阅信息获取主题: {topic}")
+            
+            for device_key in list(self.device_data_callbacks.keys()):
+                if "_data_get" in device_key:
+                    base_key = device_key.replace("_data_get", "")
+                    device_id, device_sn = base_key.split("_", 1)
+                    topic = f"{device_id}/{device_sn}/data/get"
+                    await self.client.subscribe(topic, qos=1)
+                    logger.debug(f"重新订阅数据获取主题: {topic}")
+                    
         except Exception as e:
-            logger.error(f"消息处理时出错: {e}")
+            logger.error(f"重新订阅主题时出错: {e}")
+    
+    async def _handle_messages(self):
+        """异步消息处理器，含断线重连"""
+        while not self._stop_event.is_set():
+            if not self.client:
+                # 等待客户端初始化
+                await asyncio.sleep(1)
+                continue
+        
+            try:
+                async with self.client.unfiltered_messages() as messages:
+                    async for message in messages:
+                        await self._process_message(message)
+
+            except asyncio.CancelledError:
+                logger.info("消息处理器已停止")
+                break
+            except Exception as e:
+                logger.error(f"消息处理时出错，准备重连: {e}")
+                self.is_connected = False
+                # 尝试重新连接
+                if await self.connect():
+                    logger.info("重连成功")
+                else:
+                    await asyncio.sleep(5)  # 重连失败，等待后重试
+
     
     async def _process_message(self, message):
         """处理单个消息"""
@@ -190,47 +249,48 @@ class DeviceMQTTClient:
             logger.error(f"处理消息时出错: {e}")
     
     async def connect(self) -> bool:
-        """异步连接到MQTT代理"""
         try:
-            # 创建客户端连接配置
             client_kwargs = {
                 "hostname": self.broker_host,
                 "port": self.broker_port,
                 "keepalive": self.keepalive,
-                "identifier": self.client_id,  # aiomqtt使用identifier而不是client_id
+                "identifier": self.client_id,
                 "username": self.username,
                 "password": self.password,
             }
-            
-            # 添加TLS配置
             if self.use_tls:
                 import ssl
-                # 创建SSL上下文
                 ssl_context = ssl.create_default_context()
-                # 对于自签名证书或测试环境，可以设置为不验证证书
-                # ssl_context.check_hostname = False
-                # ssl_context.verify_mode = ssl.CERT_NONE
                 client_kwargs["tls_context"] = ssl_context
-            
-            # 创建并连接客户端
+
             self.client = aiomqtt.Client(**client_kwargs)
             await self.client.__aenter__()
-            
+
             self.is_connected = True
-            tls_status = "(TLS)" if self.use_tls else "(无加密)"
-            logger.info(f"成功连接到MQTT代理: {self.broker_host}:{self.broker_port} {tls_status}")
-            logger.info(f"客户端ID: {self.client_id}")
-            logger.info(f"用户名: {self.username}")
-            
-            # 启动消息处理器
+            # 重置停止事件
+            self._stop_event.clear()
+            logger.info(f"成功连接到MQTT代理: {self.broker_host}:{self.broker_port} {'(TLS)' if self.use_tls else '(无加密)'}")
+
+            # 如果消息处理器已存在，取消并重新创建，保证单实例运行
+            if self.message_handler_task and not self.message_handler_task.done():
+                self.message_handler_task.cancel()
+                try:
+                    await self.message_handler_task
+                except asyncio.CancelledError:
+                    pass
+
             self.message_handler_task = asyncio.create_task(self._handle_messages())
             
+            # 重新订阅所有之前的主题
+            await self._resubscribe_all_topics()
+
             return True
-            
         except Exception as e:
             logger.error(f"连接失败: {e}")
             self.is_connected = False
+            self.client = None  # 确保清理客户端实例
             return False
+
     
     async def disconnect(self):
         """异步断开连接"""
