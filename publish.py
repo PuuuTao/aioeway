@@ -87,8 +87,8 @@ def verify_version():
     try:
         with open('setup.py', 'r', encoding='utf-8') as f:
             content = f.read()
-            if 'version="1.0.1"' in content:
-                print("✓ setup.py版本: 1.0.1")
+            if 'version="1.0.3"' in content:
+                print("✓ setup.py版本: 1.0.3")
             else:
                 print("⚠ 请检查setup.py中的版本号")
     except FileNotFoundError:
@@ -98,8 +98,8 @@ def verify_version():
     try:
         with open('pyproject.toml', 'r', encoding='utf-8') as f:
             content = f.read()
-            if 'version = "1.0.1"' in content:
-                print("✓ pyproject.toml版本: 1.0.1")
+            if 'version = "1.0.2"' in content:
+                print("✓ pyproject.toml版本: 1.0.2")
             else:
                 print("⚠ 请检查pyproject.toml中的版本号")
     except FileNotFoundError:

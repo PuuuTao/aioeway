@@ -14,7 +14,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="aioeway",
-    version="1.0.2",
+    version="1.0.3",
     author="PuuuTao",
     author_email="kevinwang960105@gmail.com",
     description="一个基于异步编程的MQTT设备通信库",
